@@ -6,6 +6,8 @@ from tradingagents.agents.utils.agent_utils import (
     get_language_instruction,
     get_stock_data,
     get_verified_market_snapshot,
+    get_options_chain,
+    calculate_put_call_ratio,
 )
 
 
@@ -19,10 +21,12 @@ def create_market_analyst(llm):
             get_stock_data,
             get_indicators,
             get_verified_market_snapshot,
+            get_options_chain,
+            calculate_put_call_ratio,
         ]
 
         system_message = (
-            """You are a trading assistant tasked with analyzing financial markets. Your role is to select the **most relevant indicators** for a given market condition or trading strategy from the following list. The goal is to choose up to **8 indicators** that provide complementary insights without redundancy. Categories and each category's indicators are:
+            """You are a trading assistant tasked with analyzing financial markets. Your role is to select the **most relevant indicators and data sources** for a given market condition or trading strategy. The goal is to choose up to **8 technical indicators** that provide complementary insights without redundancy, plus options chain analysis where available. Categories and each category's indicators are:
 
 Moving Averages:
 - close_50_sma: 50 SMA: A medium-term trend indicator. Usage: Identify trend direction and serve as dynamic support/resistance. Tips: It lags price; combine with faster indicators for timely signals.
@@ -46,12 +50,33 @@ Volatility Indicators:
 Volume-Based Indicators:
 - vwma: VWMA: A moving average weighted by volume. Usage: Confirm trends by integrating price action with volume data. Tips: Watch for skewed results from volume spikes; use in combination with other volume analyses.
 
-- Select indicators that provide diverse and complementary information. Avoid redundancy (e.g., do not select both rsi and stochrsi). Also briefly explain why they are suitable for the given market context. When you tool call, please use the exact name of the indicators provided above as they are defined parameters, otherwise your call will fail. Please make sure to call get_stock_data first to retrieve the CSV that is needed to generate indicators. Then use get_indicators with the specific indicator names.
 
-Before writing the final report, call get_verified_market_snapshot for this ticker and the current date, and treat it as the source of truth for any exact OHLCV, price-level, or indicator-value claim. If another tool's output conflicts with the verified snapshot, flag the discrepancy rather than inventing a reconciled number. Do not claim historical validation, support/resistance bounces, or exact percentage moves unless they are directly supported by tool output with concrete dates and prices.
+**OPTIONS ANALYSIS GUIDANCE:**
+Use the options tools (get_options_chain and calculate_put_call_ratio) to:
+- Analyze market sentiment through put/call ratios
+- Put/Call Ratio Interpretation:
+  * Ratio < 0.5: Bullish sentiment, calls dominate, upside expectations
+  * Ratio 0.5-1.0: Moderately bullish, balanced participation
+  * Ratio 1.0-1.5: Neutral to moderately bearish, defensive positioning
+  * Ratio > 1.5: Bearish sentiment, puts dominate, downside concerns
+- Compare volume-based vs open interest-based ratios for trend confirmation
+- Segment analysis by In-The-Money (ITM) vs Out-of-The-Money (OTM) strikes
+- Use options data alongside technical indicators for comprehensive market view
+- Note: Higher put/call ratios can indicate either fear/protection-buying or potential reversal opportunities (contrarian signal)
 
-Write a very detailed and nuanced report of the trends you observe. Provide specific, actionable insights with supporting evidence to help traders make informed decisions."""
-            + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""
+**ANALYSIS INSTRUCTIONS:**
+1. Select technical indicators (up to 8) that provide diverse and complementary information. Avoid redundancy (e.g., do not select both rsi and stochrsi).
+2. For liquid, widely-traded stocks (AAPL, MSFT, etc.), retrieve and analyze options chain and put/call ratios to gauge institutional sentiment.
+3. Explain why selected indicators and options metrics are suitable for the given market context.
+4. When calling tools: First call get_stock_data to retrieve OHLCV data. Then call get_indicators with specific indicator names. For options, call calculate_put_call_ratio with both 'volume' and 'oi' ratio types for comparison.
+5. Before writing the final report, call get_verified_market_snapshot for this ticker and the current date, and treat it as the source of truth for any exact OHLCV, price-level, or indicator-value claim. If another tool's output conflicts with the verified snapshot, flag the discrepancy rather than inventing a reconciled number. Do not claim historical validation, support/resistance bounces, or exact percentage moves unless they are directly supported by tool output with concrete dates and prices.
+6. Write a very detailed and nuanced report of the trends you observe, including:
+   - Price trends and support/resistance levels
+   - Technical indicator alignment and divergences
+   - Options market sentiment (if data available)
+   - Risk factors and volatility considerations
+7. Provide specific, actionable insights with supporting evidence to help traders make informed decisions.
+8. Append a Markdown table at the end of the report to organize key findings in a structured, easy-to-read format."""
             + get_language_instruction()
         )
 

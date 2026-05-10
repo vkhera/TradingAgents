@@ -14,6 +14,7 @@ from langgraph.prebuilt import ToolNode
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
     get_balance_sheet,
+    calculate_put_call_ratio,
     get_cashflow,
     get_fundamentals,
     get_global_news,
@@ -22,6 +23,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_insider_transactions,
     get_macro_indicators,
     get_news,
+    get_options_chain,
     get_prediction_markets,
     get_stock_data,
     get_verified_market_snapshot,
@@ -113,9 +115,7 @@ class TradingAgentsGraph:
             self.conditional_logic,
         )
 
-        self.propagator = Propagator(
-            max_recur_limit=self.config.get("max_recur_limit", 100),
-        )
+        self.propagator = Propagator(max_recur_limit=self.config.get("max_recur_limit", 100))
         self.reflector = Reflector(self.quick_thinking_llm)
         self.signal_processor = SignalProcessor(self.quick_thinking_llm)
 
@@ -171,6 +171,9 @@ class TradingAgentsGraph:
                     # LLM and required by its prompt; must be executable here or
                     # the call fails and the model reports it "unavailable").
                     get_verified_market_snapshot,
+                    # Options chain and put/call ratio analysis
+                    get_options_chain,
+                    calculate_put_call_ratio,
                 ]
             ),
             "social": ToolNode(
@@ -468,7 +471,6 @@ class TradingAgentsGraph:
             "investment_plan": final_state["investment_plan"],
             "final_trade_decision": final_state["final_trade_decision"],
         }
-
         # Save to file. Reject ticker values that would escape the
         # results directory when joined as a path component.
         safe_ticker = safe_ticker_component(self.ticker)
@@ -482,3 +484,31 @@ class TradingAgentsGraph:
     def process_signal(self, full_signal):
         """Process a signal to extract the core decision."""
         return self.signal_processor.process_signal(full_signal)
+
+
+def _stage_from_state(state: dict, prev: dict) -> str:
+    """Infer which major pipeline stage just completed from newly populated state fields."""
+
+    def _new(key: str) -> bool:
+        return bool(state.get(key)) and not bool(prev.get(key))
+
+    def _new_nested(k1: str, k2: str) -> bool:
+        return bool((state.get(k1) or {}).get(k2)) and not bool((prev.get(k1) or {}).get(k2))
+
+    if _new("final_trade_decision"):
+        return "Portfolio Manager - Final Decision"
+    if _new_nested("risk_debate_state", "judge_decision"):
+        return "Risk Debate Complete"
+    if _new("trader_investment_plan"):
+        return "Trader - Plan Ready"
+    if _new_nested("investment_debate_state", "judge_decision"):
+        return "Research Manager - Debate Concluded"
+    if _new("fundamentals_report"):
+        return "Fundamentals Analyst - Done"
+    if _new("news_report"):
+        return "News Analyst - Done"
+    if _new("sentiment_report"):
+        return "Social Media Analyst - Done"
+    if _new("market_report"):
+        return "Market Analyst - Done"
+    return ""

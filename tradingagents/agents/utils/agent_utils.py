@@ -23,6 +23,10 @@ from tradingagents.agents.utils.news_data_tools import (
 )
 from tradingagents.agents.utils.prediction_markets_tools import get_prediction_markets
 from tradingagents.agents.utils.technical_indicators_tools import get_indicators
+from tradingagents.agents.utils.options_tools import (
+    get_options_chain,
+    calculate_put_call_ratio,
+)
 
 # Public surface: the data tools are imported here so agents and the graph
 # import them from one place, plus the instrument/language helpers defined below.
@@ -39,6 +43,8 @@ __all__ = [
     "get_macro_indicators",
     "get_prediction_markets",
     "get_verified_market_snapshot",
+    "get_options_chain",
+    "calculate_put_call_ratio",
     "build_instrument_context",
     "resolve_instrument_identity",
     "get_instrument_context_from_state",
