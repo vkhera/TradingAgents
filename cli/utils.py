@@ -53,29 +53,8 @@ def get_ticker() -> str:
                 ("highlighted", "noinherit"),
             ]
         ),
-    ).ask()
-
     if ticker is None:
         console.print("\n[red]No ticker symbol provided. Exiting...[/red]")
-        exit(1)
-
-    return normalize_ticker_symbol(ticker) if ticker.strip() else "SPY"
-
-
-def normalize_ticker_symbol(ticker: str) -> str:
-    """Resolve user input to its canonical Yahoo symbol (single source of truth).
-
-    Delegates to the data layer's ``normalize_symbol`` so the symbol the CLI
-    passes through the pipeline is exactly the one the data path will price
-    (e.g. ``BTCUSD`` -> ``BTC-USD``, ``XAUUSD`` -> ``GC=F``). Falls back to the
-    plain upper-case if the data layer is unavailable.
-    """
-    try:
-        from tradingagents.dataflows.symbol_utils import normalize_symbol
-
-        return normalize_symbol(ticker)
-    except Exception:
-        return ticker.strip().upper()
 
 
 def detect_asset_type(ticker: str) -> AssetType:
@@ -243,13 +222,26 @@ def _require_text(message: str, hint: str) -> str:
     return response.strip()
 
 
+def _prefer_openrouter_free_models(models: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Return models ordered with free OpenRouter models first."""
+    free_models: list[tuple[str, str]] = []
+    paid_models: list[tuple[str, str]] = []
+    for name, mid in models:
+        model_id = (mid or "").strip().lower()
+        if model_id.endswith(":free"):
+            free_models.append((name, mid))
+        else:
+            paid_models.append((name, mid))
+    return free_models + paid_models
+
+
 def select_openrouter_model(mode: str) -> str:
     """Select an OpenRouter model from the newest available, or enter a custom ID.
 
     ``mode`` ("quick"/"deep") labels the prompt so the two consecutive
     OpenRouter selections are distinguishable, like the other providers (#1000).
     """
-    models = _fetch_openrouter_models()  # newest first
+    models = _prefer_openrouter_free_models(_fetch_openrouter_models())
     # Prefer the newest from mainstream providers so the shortlist isn't crowded
     # out by niche/experimental releases; fall back to all if none match.
     mainstream = [
