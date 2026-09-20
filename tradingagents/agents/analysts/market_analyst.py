@@ -1,29 +1,28 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+
 from tradingagents.agents.utils.agent_utils import (
-    build_instrument_context,
     get_indicators,
+    get_instrument_context_from_state,
     get_language_instruction,
     get_stock_data,
     get_options_chain,
     calculate_put_call_ratio,
+    get_verified_market_snapshot,
 )
-from tradingagents.dataflows.config import get_config
 
 
 def create_market_analyst(llm):
 
     def market_analyst_node(state):
         current_date = state["trade_date"]
-        asset_type = state.get("asset_type", "stock")
-        instrument_context = build_instrument_context(
-            state["company_of_interest"], asset_type
-        )
+        instrument_context = get_instrument_context_from_state(state)
 
         tools = [
             get_stock_data,
             get_indicators,
             get_options_chain,
             calculate_put_call_ratio,
+            get_verified_market_snapshot,
         ]
 
         system_message = (
@@ -51,31 +50,14 @@ Volatility Indicators:
 Volume-Based Indicators:
 - vwma: VWMA: A moving average weighted by volume. Usage: Confirm trends by integrating price action with volume data. Tips: Watch for skewed results from volume spikes; use in combination with other volume analyses.
 
-**OPTIONS ANALYSIS GUIDANCE:**
-Use the options tools (get_options_chain and calculate_put_call_ratio) to:
-- Analyze market sentiment through put/call ratios
-- Put/Call Ratio Interpretation:
-  * Ratio < 0.5: Bullish sentiment, calls dominate, upside expectations
-  * Ratio 0.5-1.0: Moderately bullish, balanced participation
-  * Ratio 1.0-1.5: Neutral to moderately bearish, defensive positioning
-  * Ratio > 1.5: Bearish sentiment, puts dominate, downside concerns
-- Compare volume-based vs open interest-based ratios for trend confirmation
-- Segment analysis by In-The-Money (ITM) vs Out-of-The-Money (OTM) strikes
-- Use options data alongside technical indicators for comprehensive market view
-- Note: Higher put/call ratios can indicate either fear/protection-buying or potential reversal opportunities (contrarian signal)
+- Select indicators that provide diverse and complementary information. Avoid redundancy (e.g., do not select both rsi and stochrsi). Also briefly explain why they are suitable for the given market context. When you tool call, please use the exact name of the indicators provided above as they are defined parameters, otherwise your call will fail. Please make sure to call get_stock_data first to retrieve the CSV that is needed to generate indicators. Then use get_indicators with the specific indicator names.
 
-**ANALYSIS INSTRUCTIONS:**
-1. Select technical indicators (up to 8) that provide diverse and complementary information. Avoid redundancy (e.g., do not select both rsi and stochrsi).
-2. For liquid, widely-traded stocks (AAPL, MSFT, etc.), retrieve and analyze options chain and put/call ratios to gauge institutional sentiment.
-3. Explain why selected indicators and options metrics are suitable for the given market context.
-4. When calling tools: First call get_stock_data to retrieve OHLCV data. Then call get_indicators with specific indicator names. For options, call calculate_put_call_ratio with both 'volume' and 'oi' ratio types for comparison.
-5. Write a very detailed and nuanced report of the trends you observe, including:
-   - Price trends and support/resistance levels
-   - Technical indicator alignment and divergences
-   - Options market sentiment (if data available)
-   - Risk factors and volatility considerations
-6. Provide specific, actionable insights with supporting evidence to help traders make informed decisions.
-7. Append a Markdown table at the end of the report to organize key findings in a structured, easy-to-read format."""
+Before writing the final report, call get_verified_market_snapshot for this ticker and the current date, and treat it as the source of truth for any exact OHLCV, price-level, or indicator-value claim. If another tool's output conflicts with the verified snapshot, flag the discrepancy rather than inventing a reconciled number. Do not claim historical validation, support/resistance bounces, or exact percentage moves unless they are directly supported by tool output with concrete dates and prices.
+
+For liquid, widely traded stocks, use get_options_chain and calculate_put_call_ratio to assess options sentiment. Compare volume and open-interest put/call ratios where available, including ITM and OTM positioning. Treat options data as sentiment evidence, not a substitute for the verified market snapshot.
+
+Write a detailed report covering trends, technical alignment or divergences, options sentiment when available, and risk factors. Provide specific, actionable insights supported by tool output."""
+            + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""
             + get_language_instruction()
         )
 
@@ -87,10 +69,10 @@ Use the options tools (get_options_chain and calculate_put_call_ratio) to:
                     " Use the provided tools to progress towards answering the question."
                     " If you are unable to fully answer, that's OK; another assistant with different tools"
                     " will help where you left off. Execute what you can to make progress."
-                    " If you or any other assistant has the FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** or deliverable,"
-                    " prefix your response with FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** so the team knows to stop."
-                    " You have access to the following tools: {tool_names}.\n{system_message}"
-                    "For your reference, the current date is {current_date}. {instrument_context}",
+                    " Report what your tools support; another agent decides the trade."
+                    " You have access to the following tools: {tool_names}."
+                    " Today's date is {current_date}; treat it as 'now' for all analysis and tool-call date ranges. {instrument_context}\n"
+                    "{system_message}",
                 ),
                 MessagesPlaceholder(variable_name="messages"),
             ]
