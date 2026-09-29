@@ -20,16 +20,16 @@ services:
       - OLLAMA_HOST=http://host.docker.internal:11434
       - LLM_PROVIDER=ollama
       - DEEP_THINK_MODEL=qwen3.5:4b
-      - QUICK_THINK_MODEL=qwen3.5:4b
+      - QUICK_THINK_MODEL=qwen3.5:2b
       - TRADINGAGENTS_API_DB_PATH=/data/db/tradingagents_api.db
       - API_DEBUG_MODE=true
-      - MAX_WORKERS=1
     ports:
       - "9000:9000"
     volumes:
       - tradingagents_api_data:/data
       - tradingagents_api_db:/data/db
       - tradingagents_data:/home/appuser/.tradingagents
+      - ./.env:/app/.env
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/healthz')"]
@@ -50,7 +50,8 @@ services:
     env_file:
       - .env
     environment:
-      - LLM_PROVIDER=ollama
+      - TRADINGAGENTS_LLM_PROVIDER=ollama
+      - OLLAMA_BASE_URL=http://ollama:11434/v1
     volumes:
       - tradingagents_data:/home/appuser/.tradingagents
     depends_on:

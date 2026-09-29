@@ -87,8 +87,12 @@ async def init_db(db_path: str = DB_PATH) -> None:
         await _ensure_column(db, "requests", "available_after", "TEXT")
         await _ensure_column(db, "requests", "deferred_for_quota", "INTEGER NOT NULL DEFAULT 0")
         await _ensure_column(db, "requests", "defer_reason", "TEXT")
+        await _ensure_column(db, "requests", "requested_deep_model", "TEXT")
+        await _ensure_column(db, "requests", "requested_quick_model", "TEXT")
         await _ensure_column(db, "batch_schedules", "last_run_at", "TEXT")
         await _ensure_column(db, "batch_schedules", "next_run_at", "TEXT")
+        await _ensure_column(db, "batch_schedules", "deep_model", "TEXT")
+        await _ensure_column(db, "batch_schedules", "quick_model", "TEXT")
 
         # Backfill legacy rows to be immediately eligible.
         await db.execute(
@@ -115,6 +119,8 @@ async def create_batch_schedule(
     llm_provider: str,
     frequency: str,
     next_run_at: Optional[str] = None,
+    deep_model: Optional[str] = None,
+    quick_model: Optional[str] = None,
     db_path: str = DB_PATH,
 ) -> str:
     schedule_id = str(uuid.uuid4())
@@ -123,10 +129,10 @@ async def create_batch_schedule(
     async with aiosqlite.connect(db_path) as db:
         await db.execute(
             """
-            INSERT INTO batch_schedules (id, ticker, llm_provider, frequency, created_at, updated_at, next_run_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO batch_schedules (id, ticker, llm_provider, frequency, created_at, updated_at, next_run_at, deep_model, quick_model)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (schedule_id, ticker.upper(), llm_provider.lower(), frequency.lower(), now, now, first_run),
+            (schedule_id, ticker.upper(), llm_provider.lower(), frequency.lower(), now, now, first_run, deep_model, quick_model),
         )
         await db.commit()
     return schedule_id
@@ -147,6 +153,8 @@ async def list_batch_schedules(db_path: str = DB_PATH) -> list[dict]:
                 b.updated_at,
                 b.last_run_at,
                 b.next_run_at,
+                b.deep_model,
+                b.quick_model,
                 r.id AS latest_request_id,
                 r.recommendation AS latest_recommendation,
                 r.submitted_at AS latest_submitted_at,
@@ -174,7 +182,7 @@ async def get_batch_schedule(schedule_id: str, db_path: str = DB_PATH) -> Option
         db.row_factory = aiosqlite.Row
         async with db.execute(
             """
-            SELECT id, ticker, llm_provider, frequency, created_at, updated_at, last_run_at, next_run_at
+            SELECT id, ticker, llm_provider, frequency, created_at, updated_at, last_run_at, next_run_at, deep_model, quick_model
             FROM batch_schedules
             WHERE id = ?
             """,
@@ -199,16 +207,18 @@ async def update_batch_schedule_config(
     llm_provider: str,
     frequency: str,
     next_run_at: str,
+    deep_model: Optional[str] = None,
+    quick_model: Optional[str] = None,
     db_path: str = DB_PATH,
 ) -> bool:
     async with aiosqlite.connect(db_path) as db:
         cursor = await db.execute(
             """
             UPDATE batch_schedules
-            SET llm_provider = ?, frequency = ?, next_run_at = ?, updated_at = ?
+            SET llm_provider = ?, frequency = ?, next_run_at = ?, updated_at = ?, deep_model = ?, quick_model = ?
             WHERE id = ?
             """,
-            (llm_provider.lower(), frequency.lower(), next_run_at, _now_iso(), schedule_id),
+            (llm_provider.lower(), frequency.lower(), next_run_at, _now_iso(), deep_model, quick_model, schedule_id),
         )
         await db.commit()
         return (cursor.rowcount or 0) > 0
@@ -312,6 +322,8 @@ async def create_request(
     analysis_date: str,
     llm_provider: str = "ollama",
     available_after: Optional[str] = None,
+    requested_deep_model: Optional[str] = None,
+    requested_quick_model: Optional[str] = None,
     db_path: str = DB_PATH,
 ) -> str:
     req_id = str(uuid.uuid4())
@@ -320,10 +332,16 @@ async def create_request(
     async with aiosqlite.connect(db_path) as db:
         await db.execute(
             """
-            INSERT INTO requests (id, ticker, analysis_date, llm_provider, status, submitted_at, available_after, deferred_for_quota)
-            VALUES (?, ?, ?, ?, 'pending', ?, ?, 0)
+            INSERT INTO requests (
+                id, ticker, analysis_date, llm_provider, status, submitted_at, available_after,
+                deferred_for_quota, requested_deep_model, requested_quick_model
+            )
+            VALUES (?, ?, ?, ?, 'pending', ?, ?, 0, ?, ?)
             """,
-            (req_id, ticker.upper(), analysis_date, llm_provider.lower(), submitted_at, eligible_at),
+            (
+                req_id, ticker.upper(), analysis_date, llm_provider.lower(), submitted_at, eligible_at,
+                requested_deep_model, requested_quick_model,
+            ),
         )
         await db.commit()
     return req_id

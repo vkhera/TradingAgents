@@ -31,7 +31,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     OLLAMA_HOST=http://host.docker.internal:11434 \
     LLM_PROVIDER=ollama \
     DEEP_THINK_MODEL=qwen3.5:4b \
-    QUICK_THINK_MODEL=qwen3.5:4b \
+    QUICK_THINK_MODEL=llama3.2:1b \
     API_DEBUG_MODE=true \
     MAX_WORKERS=1
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import io
+import json
 import os
 import sys
 import threading
@@ -80,7 +81,22 @@ CACHE_DIR = "/data/cache"
 RESULTS_DIR = "/data/logs"
 MEMORY_LOG_PATH = "/data/memory/trading_memory.md"
 API_DEBUG_MODE = os.getenv("API_DEBUG_MODE", "true").strip().lower() in ("1", "true", "yes", "on")
-_executor = ThreadPoolExecutor(max_workers=1)
+
+
+def _configured_worker_count() -> int:
+    try:
+        value = int(os.getenv("MAX_WORKERS", "1"))
+    except ValueError:
+        return 1
+    return value if 1 <= value <= 32 else 1
+
+
+MAX_WORKERS = _configured_worker_count()
+_executor = ThreadPoolExecutor(max_workers=MAX_WORKERS, thread_name_prefix="analysis")
+_ollama_endpoint_lock = threading.Lock()
+_ollama_endpoint_index = 0
+_stdout_install_lock = threading.Lock()
+_console_output_lock = threading.Lock()
 GOOGLE_429_RETRY_DELAY_SECONDS = 300
 GOOGLE_429_MAX_RETRIES = 1
 GOOGLE_MISSING_KEY_RETRY_DELAY_SECONDS = 60
@@ -103,6 +119,109 @@ def _append_request_log(req_id: str, message: str) -> None:
     timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
     with open(log_path, "a", encoding="utf-8") as f:
         f.write(f"[{timestamp}] {message}\n")
+
+
+class _TimestampedTextStream:
+    def __init__(self, stream, lock: Optional[threading.Lock] = None) -> None:
+        self._stream = stream
+        self._lock = lock or threading.Lock()
+        self._buffer = ""
+
+    def write(self, data: str) -> int:
+        self._buffer += data
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            with self._lock:
+                self._stream.write(f"[{timestamp}] {line}\n")
+                self._stream.flush()
+        return len(data)
+
+    def flush(self) -> None:
+        if self._buffer:
+            timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            with self._lock:
+                self._stream.write(f"[{timestamp}] {self._buffer}")
+                self._stream.flush()
+            self._buffer = ""
+        else:
+            self._stream.flush()
+
+
+class _ThreadLocalStdout:
+    def __init__(self, original_stream) -> None:
+        self.original_stream = original_stream
+        self._thread_state = threading.local()
+        self._fallback = _TimestampedTextStream(original_stream)
+
+    def write(self, data: str) -> int:
+        target = getattr(self._thread_state, "target", self._fallback)
+        return target.write(data)
+
+    def flush(self) -> None:
+        target = getattr(self._thread_state, "target", self._fallback)
+        target.flush()
+
+    def set_thread_target(self, target) -> None:
+        self._thread_state.target = target
+
+    def clear_thread_target(self) -> None:
+        if hasattr(self._thread_state, "target"):
+            del self._thread_state.target
+
+    def __getattr__(self, name):
+        return getattr(self.original_stream, name)
+
+
+class _TeeOutput:
+    def __init__(self, streams) -> None:
+        self._streams = streams
+
+    def write(self, data: str) -> int:
+        for stream in self._streams:
+            stream.write(data)
+        return len(data)
+
+    def flush(self) -> None:
+        for stream in self._streams:
+            stream.flush()
+
+
+def install_timestamped_stdout():
+    with _stdout_install_lock:
+        if isinstance(sys.stdout, _ThreadLocalStdout):
+            return None, sys.stdout
+        original = sys.stdout
+        proxy = _ThreadLocalStdout(original)
+        sys.stdout = proxy
+        return original, proxy
+
+
+def restore_stdout(original, proxy) -> None:
+    if original is None:
+        return
+    with _stdout_install_lock:
+        if sys.stdout is proxy:
+            sys.stdout = original
+
+
+def _next_ollama_endpoint() -> str:
+    global _ollama_endpoint_index
+    raw = os.getenv("OLLAMA_ENDPOINTS", "").strip()
+    try:
+        endpoints = json.loads(raw) if raw else []
+    except json.JSONDecodeError:
+        endpoints = []
+    endpoints = [
+        item for item in endpoints
+        if isinstance(item, dict) and isinstance(item.get("url"), str) and item["url"].strip()
+    ]
+    if not endpoints:
+        return os.getenv("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+    with _ollama_endpoint_lock:
+        endpoint = endpoints[_ollama_endpoint_index % len(endpoints)]
+        _ollama_endpoint_index += 1
+    return endpoint["url"].strip().rstrip("/")
 
 
 def _is_google_429_error(exc: Exception, provider: Optional[str]) -> bool:
@@ -146,7 +265,11 @@ def _in_one_day_window_iso(now: Optional[datetime.datetime] = None) -> tuple[str
     return start.isoformat(), end.isoformat()
 
 
-def _pick_provider_config(request_provider: Optional[str]) -> tuple[str, Optional[str], str, str]:
+def _pick_provider_config(
+    request_provider: Optional[str],
+    requested_deep_model: Optional[str] = None,
+    requested_quick_model: Optional[str] = None,
+) -> tuple[str, Optional[str], str, str]:
     provider = (request_provider or "ollama").strip().lower()
     if provider not in SUPPORTED_PROVIDERS:
         provider = "ollama"
@@ -155,21 +278,21 @@ def _pick_provider_config(request_provider: Optional[str]) -> tuple[str, Optiona
         backend_url = os.getenv("GOOGLE_BASE_URL") or None
         deep_model = os.getenv("GOOGLE_DEEP_THINK_MODEL", "gemini-2.5-pro")
         quick_model = os.getenv("GOOGLE_QUICK_THINK_MODEL", "gemini-2.5-flash-lite")
-        return provider, backend_url, deep_model, quick_model
+        return provider, backend_url, (requested_deep_model or deep_model), (requested_quick_model or quick_model)
 
     if provider == "openrouter":
         backend_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
         # Default to free-tier models on OpenRouter; callers can override via env vars.
         deep_model = os.getenv("OPENROUTER_DEEP_THINK_MODEL", "deepseek/deepseek-r1-0528:free")
         quick_model = os.getenv("OPENROUTER_QUICK_THINK_MODEL", "qwen/qwen3-coder:free")
-        return provider, backend_url, deep_model, quick_model
+        return provider, backend_url, (requested_deep_model or deep_model), (requested_quick_model or quick_model)
 
-    ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+    ollama_host = _next_ollama_endpoint()
     backend_url = ollama_host.rstrip("/") + "/v1"
     # Keep Ollama defaults on Qwen models unless explicitly overridden.
     deep_model = os.getenv("DEEP_THINK_MODEL", "qwen3:latest")
     quick_model = os.getenv("QUICK_THINK_MODEL", "qwen3:latest")
-    return provider, backend_url, deep_model, quick_model
+    return provider, backend_url, (requested_deep_model or deep_model), (requested_quick_model or quick_model)
 
 
 def _estimate_cost_usd(provider: str, deep_model: str, quick_model: str, tokens_in: int, tokens_out: int) -> float:
@@ -208,15 +331,25 @@ class _LLMTimingCallback(BaseCallbackHandler):
         run_id = kwargs.get("run_id")
         return str(run_id) if run_id is not None else None
 
-    def _model_name(self, serialized: dict) -> str:
-        kwargs = serialized.get("kwargs", {}) if isinstance(serialized, dict) else {}
-        return str(kwargs.get("model") or serialized.get("name") or "unknown-model")
+    def _model_name(self, serialized: dict, **callback_kwargs) -> str:
+        serialized_kwargs = serialized.get("kwargs", {}) if isinstance(serialized, dict) else {}
+        invocation_params = callback_kwargs.get("invocation_params", {})
+        metadata = callback_kwargs.get("metadata", {})
+        return str(
+            (invocation_params.get("model") if isinstance(invocation_params, dict) else None)
+            or (invocation_params.get("model_name") if isinstance(invocation_params, dict) else None)
+            or (metadata.get("model") if isinstance(metadata, dict) else None)
+            or (metadata.get("model_name") if isinstance(metadata, dict) else None)
+            or serialized_kwargs.get("model")
+            or serialized.get("name")
+            or "unknown-model"
+        )
 
     def _mark_start(self, event_name: str, serialized: dict, **kwargs) -> None:
         key = self._run_key(**kwargs)
         if not key:
             return
-        model_name = self._model_name(serialized)
+        model_name = self._model_name(serialized, **kwargs)
         started = time.perf_counter()
         with self._lock:
             if key not in self._started_at:
@@ -256,12 +389,21 @@ class _LLMTimingCallback(BaseCallbackHandler):
         print(f"[LLM] error run_id={key} duration_seconds={duration:.3f} error={error}")
 
 
-def _run_analysis(req_id: str, ticker: str, analysis_date: str, llm_provider: Optional[str]) -> tuple[str, str, dict, str, str, str, float, dict]:
+def _run_analysis(
+    req_id: str,
+    ticker: str,
+    analysis_date: str,
+    llm_provider: Optional[str],
+    requested_deep_model: Optional[str] = None,
+    requested_quick_model: Optional[str] = None,
+) -> tuple[str, str, dict, str, str, str, float, dict]:
     """Blocking: runs TradingAgents and returns recommendation, file path, usage stats, and agent recommendations."""
     from tradingagents.graph.trading_graph import TradingAgentsGraph
     from tradingagents.default_config import DEFAULT_CONFIG
 
-    provider, backend_url, deep_model, quick_model = _pick_provider_config(llm_provider)
+    provider, backend_url, deep_model, quick_model = _pick_provider_config(
+        llm_provider, requested_deep_model, requested_quick_model
+    )
 
     config = DEFAULT_CONFIG.copy()
     config["llm_provider"] = provider
@@ -279,31 +421,30 @@ def _run_analysis(req_id: str, ticker: str, analysis_date: str, llm_provider: Op
     }
     config["max_recur_limit"] = int(os.getenv("MAX_RECUR_LIMIT", "500"))
 
-    class _TeeOutput:
-        def __init__(self, streams: list[io.TextIOBase]):
-            self._streams = streams
-
-        def write(self, data: str) -> int:
-            for s in self._streams:
-                s.write(data)
-                s.flush()
-            return len(data)
-
-        def flush(self) -> None:
-            for s in self._streams:
-                s.flush()
-
     # Capture stdout and persist live logs while the request is running.
     captured = io.StringIO()
-    old_stdout = sys.stdout
+    installed_here = not isinstance(sys.stdout, _ThreadLocalStdout)
+    original_stdout, stdout_proxy = install_timestamped_stdout()
     Path(ANALYSIS_DIR).mkdir(parents=True, exist_ok=True)
     live_log_path = Path(ANALYSIS_DIR) / f"{req_id}.live.log"
     live_log = open(live_log_path, "a", encoding="utf-8")
-    sys.stdout = _TeeOutput([captured, live_log])
+    tee = _TeeOutput(
+        [
+            captured,
+            _TimestampedTextStream(live_log),
+            _TimestampedTextStream(stdout_proxy.original_stream, _console_output_lock),
+        ]
+    )
+    stdout_proxy.set_thread_target(tee)
 
     analysis_started_utc = datetime.datetime.now(datetime.timezone.utc)
     analysis_started_timer = time.perf_counter()
     print(f"[Analysis] start_time={analysis_started_utc.isoformat()} request_id={req_id}")
+    print(
+        f"[Analysis] routing request_id={req_id} provider={provider} "
+        f"endpoint={backend_url or 'provider-default'} "
+        f"deep_model={deep_model} quick_model={quick_model}"
+    )
 
     final_state = None
     stats_callback = _TrackingStatsHandler(provider)
@@ -325,9 +466,11 @@ def _run_analysis(req_id: str, ticker: str, analysis_date: str, llm_provider: Op
             f"[Analysis] end_time={analysis_ended_utc.isoformat()} "
             f"request_id={req_id} duration_seconds={analysis_duration:.3f}"
         )
-        live_log.flush()
+        tee.flush()
+        stdout_proxy.clear_thread_target()
         live_log.close()
-        sys.stdout = old_stdout
+        if installed_here:
+            restore_stdout(original_stdout, stdout_proxy)
         # Deregister live counter regardless of success or failure
         _live_deregister_calls(provider, stats_callback.get_stats().get("llm_calls", 0))
 
@@ -429,6 +572,8 @@ async def worker_loop(db_path: str = DB_PATH) -> None:
             continue
 
         request_provider = row.get("llm_provider") if row else None
+        requested_deep_model = row.get("requested_deep_model") if row else None
+        requested_quick_model = row.get("requested_quick_model") if row else None
 
         if (request_provider or "").strip().lower() == "google":
             if not (os.getenv("GOOGLE_API_KEY") or "").strip():
@@ -486,7 +631,7 @@ async def worker_loop(db_path: str = DB_PATH) -> None:
         while attempt < max_attempts:
             try:
                 recommendation, filename, stats, provider, deep_model, quick_model, estimated_cost_usd, agent_recommendations = await loop.run_in_executor(
-                    _executor, _run_analysis, req_id, ticker, analysis_date, request_provider
+                    _executor, _run_analysis, req_id, ticker, analysis_date, request_provider, requested_deep_model, requested_quick_model
                 )
                 await update_request_completed(
                     req_id,

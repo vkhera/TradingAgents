@@ -1,0 +1,189 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Recreate API container with saved settings",
+			"type": "shell",
+			"command": "docker",
+			"args": [
+				"compose",
+				"up",
+				"-d",
+				"--force-recreate",
+				"tradingagents-api"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "Check Ollama reachability from API container",
+			"type": "shell",
+			"command": "docker",
+			"args": [
+				"compose",
+				"exec",
+				"-T",
+				"tradingagents-api",
+				"python",
+				"-c",
+				"import urllib.request; hosts=['http://host.docker.internal:11434/api/tags','http://10.0.0.18:11434/api/tags'];\nfor url in hosts:\n try:\n  r=urllib.request.urlopen(url, timeout=4); print(url, r.status, r.read(200).decode(errors='replace'))\n except Exception as e: print(url, type(e).__name__, str(e))"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "Probe local Ollama from API container",
+			"type": "shell",
+			"command": "docker",
+			"args": [
+				"compose",
+				"exec",
+				"-T",
+				"tradingagents-api",
+				"python",
+				"-c",
+				"import urllib.request; print(urllib.request.urlopen(\"http://host.docker.internal:11434/api/tags\", timeout=4).status)"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "Probe LAN Ollama from API container",
+			"type": "shell",
+			"command": "docker",
+			"args": [
+				"compose",
+				"exec",
+				"-T",
+				"tradingagents-api",
+				"python",
+				"-c",
+				"import urllib.request; print(urllib.request.urlopen(\"http://10.0.0.18:11434/api/tags\", timeout=4).status)"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "Probe local Ollama HTTP endpoint",
+			"type": "shell",
+			"command": "docker",
+			"args": [
+				"compose",
+				"exec",
+				"-T",
+				"tradingagents-api",
+				"wget",
+				"-qO-",
+				"http://host.docker.internal:11434/api/tags"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "Probe LAN Ollama HTTP endpoint",
+			"type": "shell",
+			"command": "docker",
+			"args": [
+				"compose",
+				"exec",
+				"-T",
+				"tradingagents-api",
+				"wget",
+				"-qO-",
+				"http://10.0.0.18:11434/api/tags"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "Probe local Ollama from API container",
+			"type": "shell",
+			"command": "docker",
+			"args": [
+				"compose",
+				"exec",
+				"-T",
+				"tradingagents-api",
+				"python",
+				"-c",
+				"import urllib.request; print(urllib.request.urlopen(bytes([104,116,116,112,58,47,47,104,111,115,116,46,100,111,99,107,101,114,46,105,110,116,101,114,110,97,108,58,49,49,52,51,52,47,97,112,105,47,116,97,103,115]).decode(), timeout=4).status)"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "Probe LAN Ollama from API container",
+			"type": "shell",
+			"command": "docker",
+			"args": [
+				"compose",
+				"exec",
+				"-T",
+				"tradingagents-api",
+				"python",
+				"-c",
+				"import urllib.request; print(urllib.request.urlopen(bytes([104,116,116,112,58,47,47,49,48,46,48,46,48,46,49,56,58,49,49,52,51,52,47,97,112,105,47,116,97,103,115]).decode(), timeout=4).status)"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "Probe local Ollama from API container 2",
+			"type": "shell",
+			"command": "docker",
+			"args": [
+				"compose",
+				"exec",
+				"-T",
+				"tradingagents-api",
+				"python",
+				"-c",
+				"import urllib.request; print(urllib.request.urlopen(bytes([104,116,116,112,58,47,47,104,111,115,116,46,100,111,99,107,101,114,46,105,110,116,101,114,110,97,108,58,49,49,52,51,52,47,97,112,105,47,116,97,103,115]).decode(), timeout=4).status)"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "Probe LAN Ollama from API container 2",
+			"type": "shell",
+			"command": "docker",
+			"args": [
+				"compose",
+				"exec",
+				"-T",
+				"tradingagents-api",
+				"python",
+				"-c",
+				"import urllib.request; print(urllib.request.urlopen(bytes([104,116,116,112,58,47,47,49,48,46,48,46,48,46,49,56,58,49,49,52,51,52,47,97,112,105,47,116,97,103,115]).decode(), timeout=4).status)"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "Test endpoint model logging 1",
+			"type": "shell",
+			"command": "C:/Users/normaluser/AppData/Local/Programs/Python/Python312/python.exe",
+			"args": [
+				"-m",
+				"pytest",
+				"tests/test_api_ollama_runtime_settings.py",
+				"-q"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "Build API image with routing logs",
+			"type": "shell",
+			"command": "docker",
+			"args": [
+				"compose",
+				"build",
+				"tradingagents-api"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "Recreate API with routing logs",
+			"type": "shell",
+			"command": "docker",
+			"args": [
+				"compose",
+				"up",
+				"-d",
+				"--force-recreate",
+				"tradingagents-api"
+			],
+			"problemMatcher": []
+		}
+	]
+}

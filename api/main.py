@@ -20,6 +20,7 @@ import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
@@ -59,16 +60,26 @@ from api.schemas import (
     EnvVarUpdateRequest,
     EnvVarValueResponse,
     LatestRecommendationResponse,
+    OllamaEndpoint,
     RequestListResponse,
     RequestStatus,
+    RuntimeSettingsUpdateRequest,
     SubmitResponse,
     VaultRefreshResponse,
 )
 from api.vault import VaultError, refresh_runtime_env_from_vault
-from api.worker import ANALYSIS_DIR, get_live_provider_calls, task_queue, worker_loop
+from api.worker import (
+    ANALYSIS_DIR,
+    MAX_WORKERS,
+    get_live_provider_calls,
+    install_timestamped_stdout,
+    restore_stdout,
+    task_queue,
+    worker_loop,
+)
 
 _API_VERSION = "1.0.0"
-_NUM_WORKERS = 1
+_NUM_WORKERS = MAX_WORKERS
 _NUM_SCHEDULERS = 1
 _SUPPORTED_PROVIDERS = {"ollama", "google", "openrouter"}
 _SUPPORTED_BATCH_FREQUENCIES = {"daily", "weekly", "monthly"}
@@ -284,6 +295,8 @@ def _build_batch_schedule_item(row: dict, base_url: str) -> BatchScheduleItem:
         ticker=row["ticker"],
         llm_provider=row["llm_provider"],
         frequency=row["frequency"],
+        deep_model=row.get("deep_model"),
+        quick_model=row.get("quick_model"),
         next_run_at=row.get("next_run_at"),
         last_schedule_run_at=row.get("last_run_at"),
         latest_recommendation=row.get("latest_recommendation"),
@@ -323,6 +336,8 @@ async def _batch_schedule_loop() -> None:
                 analysis_date=business_date,
                 llm_provider=schedule["llm_provider"],
                 available_after=now_iso,
+                requested_deep_model=schedule.get("deep_model"),
+                requested_quick_model=schedule.get("quick_model"),
                 db_path=DB_PATH,
             )
             await task_queue.put((req_id, schedule["ticker"], business_date))
@@ -432,34 +447,36 @@ def _render_closed_requests_html(items: list[RequestStatus]) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    original_stdout, stdout_proxy = install_timestamped_stdout()
+    workers = []
+    schedulers = []
     try:
-        _refresh_vault_keys_and_persist()
-    except VaultError as exc:
-        # Keep service booting even if Vault is temporarily unavailable.
-        print(f"[Vault] startup refresh failed: {exc}")
+        try:
+            _refresh_vault_keys_and_persist()
+        except VaultError as exc:
+            # Keep service booting even if Vault is temporarily unavailable.
+            print(f"[Vault] startup refresh failed: {exc}")
 
-    await init_db(DB_PATH)
-    await mark_stale_running_requests(db_path=DB_PATH)
-    await _enqueue_due_pending_requests_once()
-    Path(ANALYSIS_DIR).mkdir(parents=True, exist_ok=True)
-    # Start worker and scheduler tasks.
-    workers = [
-        asyncio.create_task(worker_loop(db_path=DB_PATH))
-        for _ in range(_NUM_WORKERS)
-    ]
-    schedulers = [
-        asyncio.create_task(_pending_enqueue_loop()),
-        *[
-            asyncio.create_task(_batch_schedule_loop())
-            for _ in range(_NUM_SCHEDULERS)
-        ],
-    ]
-    yield
-    # Cancel background tasks on shutdown.
-    for w in workers:
-        w.cancel()
-    for s in schedulers:
-        s.cancel()
+        await init_db(DB_PATH)
+        await mark_stale_running_requests(db_path=DB_PATH)
+        await _enqueue_due_pending_requests_once()
+        Path(ANALYSIS_DIR).mkdir(parents=True, exist_ok=True)
+        workers = [
+            asyncio.create_task(worker_loop(db_path=DB_PATH))
+            for _ in range(_NUM_WORKERS)
+        ]
+        schedulers = [
+            asyncio.create_task(_pending_enqueue_loop()),
+            *[
+                asyncio.create_task(_batch_schedule_loop())
+                for _ in range(_NUM_SCHEDULERS)
+            ],
+        ]
+        yield
+    finally:
+        for task in (*workers, *schedulers):
+            task.cancel()
+        restore_stdout(original_stdout, stdout_proxy)
 
 
 app = FastAPI(
@@ -533,7 +550,14 @@ async def submit_analysis(body: AnalyzeRequest, request: Request):
             ),
         )
 
-    req_id = await create_request(ticker, analysis_date, llm_provider=llm_provider, db_path=DB_PATH)
+    req_id = await create_request(
+        ticker,
+        analysis_date,
+        llm_provider=llm_provider,
+        requested_deep_model=(body.deep_model or None),
+        requested_quick_model=(body.quick_model or None),
+        db_path=DB_PATH,
+    )
     await task_queue.put((req_id, ticker, analysis_date))
 
     return SubmitResponse(
@@ -654,6 +678,8 @@ async def create_batched_schedule(body: BatchScheduleCreateRequest, request: Req
         llm_provider=llm_provider,
         frequency=frequency,
         next_run_at=_utc_now().isoformat(),
+        deep_model=(body.deep_model or None),
+        quick_model=(body.quick_model or None),
         db_path=DB_PATH,
     )
     row = {
@@ -661,6 +687,8 @@ async def create_batched_schedule(body: BatchScheduleCreateRequest, request: Req
         "ticker": ticker,
         "llm_provider": llm_provider,
         "frequency": frequency,
+        "deep_model": body.deep_model or None,
+        "quick_model": body.quick_model or None,
         "next_run_at": _utc_now().isoformat(),
         "last_run_at": None,
         "latest_recommendation": None,
@@ -710,6 +738,8 @@ async def update_batched_schedule(schedule_id: str, body: BatchScheduleUpdateReq
         llm_provider=llm_provider,
         frequency=frequency,
         next_run_at=next_run_at,
+        deep_model=(body.deep_model or None),
+        quick_model=(body.quick_model or None),
         db_path=DB_PATH,
     )
     if not updated:
@@ -747,6 +777,8 @@ async def rerun_batched_schedule(schedule_id: str, body: BatchScheduleRerunReque
         analysis_date=analysis_date,
         llm_provider=llm_provider,
         available_after=now_iso,
+        requested_deep_model=(body.deep_model or schedule.get("deep_model")),
+        requested_quick_model=(body.quick_model or schedule.get("quick_model")),
         db_path=DB_PATH,
     )
     await task_queue.put((req_id, schedule["ticker"], analysis_date))
@@ -821,6 +853,91 @@ async def set_env_var(var_name: str, body: EnvVarUpdateRequest):
     os.environ[name] = body.value
     _upsert_env_file_value(name, body.value)
     return EnvVarValueResponse(name=name, value=body.value, exists=True)
+
+
+def _normalize_ollama_endpoints(endpoints: list[OllamaEndpoint]) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+    for endpoint in endpoints:
+        name = endpoint.name.strip()
+        url = endpoint.url.strip()
+        try:
+            parsed = urlsplit(url)
+            valid_port = parsed.port is None or 1 <= parsed.port <= 65535
+        except ValueError:
+            valid_port = False
+            parsed = urlsplit("")
+        if (
+            not name
+            or parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+            or not valid_port
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid Ollama URL for '{name or 'unnamed endpoint'}'. Use a base URL such as http://192.168.1.20:11434 without /v1.",
+            )
+        base_url = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+        if base_url in seen_urls:
+            raise HTTPException(status_code=422, detail=f"Duplicate Ollama endpoint URL: {base_url}")
+        seen_urls.add(base_url)
+        normalized.append({"name": name, "url": base_url})
+    if not normalized:
+        raise HTTPException(status_code=422, detail="At least one Ollama endpoint is required")
+    return normalized
+
+
+def _default_ollama_endpoint_url() -> str:
+    configured = os.getenv("OLLAMA_HOST", "http://localhost:11434").strip()
+    parsed = urlsplit(configured)
+    if parsed.scheme in {"http", "https"} and parsed.netloc and parsed.path.rstrip("/") == "/v1":
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return configured.rstrip("/") or "http://localhost:11434"
+
+
+def _read_runtime_ollama_endpoints() -> list[dict[str, str]]:
+    raw = os.getenv("OLLAMA_ENDPOINTS", "").strip()
+    if raw:
+        try:
+            values = json.loads(raw)
+            if isinstance(values, list):
+                endpoints = [OllamaEndpoint(**value) for value in values]
+                return _normalize_ollama_endpoints(endpoints)
+        except (json.JSONDecodeError, TypeError, ValueError, HTTPException):
+            pass
+    return [{"name": "Local Ollama", "url": _default_ollama_endpoint_url()}]
+
+
+@app.get("/settings/runtime")
+async def get_runtime_settings():
+    try:
+        max_workers = int(os.getenv("MAX_WORKERS", str(MAX_WORKERS)))
+    except ValueError:
+        max_workers = MAX_WORKERS
+    if not 1 <= max_workers <= 32:
+        max_workers = MAX_WORKERS
+    return {"max_workers": max_workers, "ollama_endpoints": _read_runtime_ollama_endpoints()}
+
+
+@app.put("/settings/runtime")
+async def update_runtime_settings(body: RuntimeSettingsUpdateRequest):
+    endpoints = _normalize_ollama_endpoints(body.ollama_endpoints)
+    max_workers = body.max_workers
+    endpoints_value = json.dumps(endpoints, separators=(",", ":"))
+    os.environ["MAX_WORKERS"] = str(max_workers)
+    os.environ["OLLAMA_ENDPOINTS"] = endpoints_value
+    _upsert_env_file_value("MAX_WORKERS", str(max_workers))
+    _upsert_env_file_value("OLLAMA_ENDPOINTS", endpoints_value)
+    return {
+        "max_workers": max_workers,
+        "ollama_endpoints": endpoints,
+        "workers_restart_required": max_workers != MAX_WORKERS,
+    }
 
 
 @app.post("/vault/refresh", response_model=VaultRefreshResponse)
@@ -1156,6 +1273,7 @@ async def batching_page():
         .warning { background:#0f766e; color:#fff; }
         .row-provider { min-width:130px; padding:6px 8px; font-size:12px; border-radius:8px; }
         .row-frequency { min-width:120px; padding:6px 8px; font-size:12px; border-radius:8px; display:none; }
+        .row-model { min-width:120px; padding:6px 8px; font-size:12px; border-radius:8px; display:none; }
         @media (max-width: 960px) {
             .toolbar { grid-template-columns: 1fr; }
         }
@@ -1212,6 +1330,8 @@ async def batching_page():
                             <th>Ticker</th>
                             <th>Provider</th>
                             <th>Frequency</th>
+                            <th>Quick Model</th>
+                            <th>Deep Model</th>
                             <th>Latest Recommendation</th>
                             <th>Last Run Date & Time</th>
                             <th>Latest Run Logs</th>
@@ -1266,6 +1386,15 @@ async def batching_page():
             return d.toLocaleString();
         }
 
+        function toggleProviderSelect(selectEl) {
+            const isOllama = (selectEl.value || '').toLowerCase() === 'ollama';
+            const row = selectEl.closest('tr');
+            const scope = row || document;
+            scope.querySelectorAll('.row-model').forEach((el) => {
+                el.style.display = isOllama ? 'inline-block' : 'none';
+            });
+        }
+
         async function loadSchedules() {
             const res = await fetch('/batching/schedules');
             const data = await res.json();
@@ -1289,6 +1418,8 @@ async def batching_page():
                         <option value="monthly" ${item.frequency === 'monthly' ? 'selected' : ''}>Monthly</option>
                     </select>
                 `;
+                const quickModelInput = `<input class="row-model" data-quick-model-id="${safe(item.id)}" placeholder="llama3.2:1b" value="${safe(item.quick_model || 'llama3.2:1b')}" />`;
+                const deepModelInput = `<input class="row-model" data-deep-model-id="${safe(item.id)}" placeholder="qwen3.5:4b" value="${safe(item.deep_model || 'qwen3.5:4b')}" />`;
                 const recLink = rec === '—'
                     ? '—'
                     : `<a href="#" class="rec-link" data-rec-ticker="${safe(item.ticker)}" data-rec-provider="${safe(item.llm_provider)}" title="${safe(rec)}">${safe(rec)}</a>`;
@@ -1297,6 +1428,8 @@ async def batching_page():
                     <td>${safe(item.ticker)}</td>
                     <td>${safe(item.llm_provider)}</td>
                     <td><span class="pill">${safe(item.frequency)}</span></td>
+                    <td>${item.llm_provider === 'ollama' ? safe(item.quick_model || '—') : '—'}</td>
+                    <td>${item.llm_provider === 'ollama' ? safe(item.deep_model || '—') : '—'}</td>
                     <td><div class="rec" title="${safe(rec)}">${recLink}</div></td>
                     <td>${formatTime(item.last_run_at)}</td>
                     <td>${logs}</td>
@@ -1305,6 +1438,8 @@ async def batching_page():
                         <div class="actions">
                             ${providerSelect}
                             ${frequencySelect}
+                            ${quickModelInput}
+                            ${deepModelInput}
                             <button class="mini-btn warning" data-edit-id="${safe(item.id)}" data-editing="false">Edit</button>
                             <button class="mini-btn secondary" data-rerun-id="${safe(item.id)}">Rerun</button>
                             <button class="mini-btn danger" data-delete-id="${safe(item.id)}">Delete</button>
@@ -1343,14 +1478,20 @@ async def batching_page():
                     await toggleEditSave(id || '', el);
                 });
             });
-        }
 
+            root.querySelectorAll('[data-provider-id]').forEach((el) => {
+                toggleProviderSelect(el);
+                el.addEventListener('change', () => toggleProviderSelect(el));
+            });
+        }
         async function toggleEditSave(scheduleId, buttonEl) {
             const message = document.getElementById('message');
             if (!scheduleId || !buttonEl) return;
 
             const providerEl = document.querySelector(`[data-provider-id="${CSS.escape(scheduleId)}"]`);
             const frequencyEl = document.querySelector(`[data-frequency-id="${CSS.escape(scheduleId)}"]`);
+            const quickModelEl = document.querySelector(`[data-quick-model-id="${CSS.escape(scheduleId)}"]`);
+            const deepModelEl = document.querySelector(`[data-deep-model-id="${CSS.escape(scheduleId)}"]`);
             if (!providerEl || !frequencyEl) return;
 
             const editing = buttonEl.getAttribute('data-editing') === 'true';
@@ -1361,18 +1502,21 @@ async def batching_page():
                 }
                 editingScheduleId = scheduleId;
                 frequencyEl.style.display = 'inline-block';
+                toggleProviderSelect(providerEl);
                 buttonEl.setAttribute('data-editing', 'true');
                 buttonEl.textContent = 'Save';
-                message.textContent = 'Edit mode enabled. Update provider/frequency and click Save.';
+                message.textContent = 'Edit mode enabled. Update provider/frequency/models and click Save.';
                 return;
             }
 
             const llm_provider = providerEl.value || 'ollama';
             const frequency = frequencyEl.value || 'daily';
+            const quick_model = llm_provider === 'ollama' ? ((quickModelEl && quickModelEl.value) || 'llama3.2:1b') : null;
+            const deep_model = llm_provider === 'ollama' ? ((deepModelEl && deepModelEl.value) || 'qwen3.5:4b') : null;
             const res = await fetch(`/batching/schedules/${encodeURIComponent(scheduleId)}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ llm_provider, frequency }),
+                body: JSON.stringify({ llm_provider, frequency, quick_model, deep_model }),
             });
             const data = await res.json();
             if (!res.ok) {
@@ -1408,11 +1552,15 @@ async def batching_page():
             if (!scheduleId) return;
             const providerEl = document.querySelector(`[data-provider-id="${CSS.escape(scheduleId)}"]`);
             const llm_provider = (providerEl && providerEl.value) ? providerEl.value : 'ollama';
+            const quickModelEl = document.querySelector(`[data-quick-model-id="${CSS.escape(scheduleId)}"]`);
+            const deepModelEl = document.querySelector(`[data-deep-model-id="${CSS.escape(scheduleId)}"]`);
+            const quick_model = llm_provider === 'ollama' ? ((quickModelEl && quickModelEl.value) || 'llama3.2:1b') : null;
+            const deep_model = llm_provider === 'ollama' ? ((deepModelEl && deepModelEl.value) || 'qwen3.5:4b') : null;
 
             const res = await fetch(`/batching/schedules/${encodeURIComponent(scheduleId)}/rerun`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ llm_provider }),
+                body: JSON.stringify({ llm_provider, quick_model, deep_model }),
             });
             const data = await res.json();
             if (!res.ok) {
@@ -1464,6 +1612,8 @@ async def batching_page():
             const ticker = (document.getElementById('ticker').value || '').trim().toUpperCase();
             const llm_provider = (document.getElementById('provider').value || 'ollama').trim();
             const frequency = (document.getElementById('frequency').value || 'daily').trim();
+            const quick_model = llm_provider === 'ollama' ? ((document.getElementById('quickModel').value || '').trim() || 'llama3.2:1b') : null;
+            const deep_model = llm_provider === 'ollama' ? ((document.getElementById('deepModel').value || '').trim() || 'qwen3.5:4b') : null;
             const message = document.getElementById('message');
 
             if (!ticker) {
@@ -1474,7 +1624,7 @@ async def batching_page():
             const res = await fetch('/batching/schedules', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ticker, llm_provider, frequency }),
+                body: JSON.stringify({ ticker, llm_provider, frequency, quick_model, deep_model }),
             });
             const data = await res.json();
 
@@ -1489,6 +1639,12 @@ async def batching_page():
         }
 
         document.getElementById('add').addEventListener('click', addSchedule);
+        document.getElementById('provider').addEventListener('change', (ev) => {
+            const isOllama = (ev.target.value || '').toLowerCase() === 'ollama';
+            document.getElementById('quickModelField').style.display = isOllama ? 'block' : 'none';
+            document.getElementById('deepModelField').style.display = isOllama ? 'block' : 'none';
+        });
+        document.getElementById('provider').dispatchEvent(new Event('change'));
         document.getElementById('historyClose').addEventListener('click', () => {
             document.getElementById('historyModal').style.display = 'none';
         });
@@ -1540,6 +1696,10 @@ async def settings_page():
         table { width:100%; border-collapse: collapse; margin-top:10px; }
         th, td { text-align:left; padding:8px 10px; border-bottom:1px solid #e2e8f0; font-size:13px; }
         th { color:#334155; background:#f1f5f9; }
+        .runtime-settings { border-top:1px solid var(--line); margin-top:16px; padding-top:14px; }
+        .runtime-settings h2 { margin:0 0 6px; font-size:18px; }
+        .endpoint-input { box-sizing:border-box; min-width:150px; width:100%; }
+        .endpoint-action { padding:6px 9px; }
     </style>
 </head>
 <body>
@@ -1554,6 +1714,22 @@ async def settings_page():
             </div>
             <h1>Settings</h1>
             <p class="muted">View and update any key from your <code>.env</code>. Type a key name to add or update it.</p>
+            <section class="runtime-settings" aria-labelledby="runtimeTitle">
+                <h2 id="runtimeTitle">Analysis Runtime</h2>
+                <label for="maxWorkers">MAX_WORKERS (maximum concurrent analyses, 1-32)</label>
+                <input id="maxWorkers" type="number" min="1" max="32" step="1" value="1" />
+                <p class="muted">Worker count changes require restarting the API container. Ollama endpoint changes apply to the next analysis.</p>
+                <div class="muted">New analyses are assigned to endpoints round-robin; a failed endpoint does not automatically fail over. Use a base URL without <code>/v1</code>. Remote Ollama must listen on its network interface and allow TCP port 11434 from the Docker host. Pull the selected models on each endpoint.</div>
+                <table>
+                    <thead><tr><th>Name</th><th>Base URL</th><th>Action</th></tr></thead>
+                    <tbody id="ollamaEndpointBody"></tbody>
+                </table>
+                <div class="row">
+                    <button id="addOllamaEndpoint" class="endpoint-action" type="button">Add endpoint</button>
+                    <button id="saveRuntimeSettings" type="button">Save runtime settings</button>
+                    <span id="runtimeMsg" class="muted" aria-live="polite"></span>
+                </div>
+            </section>
             <div class="row" style="margin:8px 0 14px">
                 <a class="ghost-btn" href="/docs" target="_blank" rel="noopener noreferrer">Swagger Definition</a>
                 <a class="ghost-btn" href="/api-definition" target="_blank" rel="noopener noreferrer">API Definition</a>
@@ -1672,6 +1848,59 @@ async def settings_page():
             });
         }
 
+        function renderOllamaEndpoints(endpoints) {
+            const root = document.getElementById('ollamaEndpointBody');
+            root.innerHTML = endpoints.map((endpoint, index) => `<tr data-endpoint-index="${index}">
+                <td><input class="endpoint-input" data-endpoint-name value="${esc(endpoint.name)}" aria-label="Endpoint name" /></td>
+                <td><input class="endpoint-input" data-endpoint-url value="${esc(endpoint.url)}" placeholder="http://192.168.1.20:11434" aria-label="Ollama base URL" /></td>
+                <td><button class="endpoint-action" type="button" data-remove-endpoint="${index}" aria-label="Remove endpoint">Remove</button></td>
+            </tr>`).join('');
+            root.querySelectorAll('[data-remove-endpoint]').forEach(button => {
+                button.addEventListener('click', () => {
+                    const index = Number(button.getAttribute('data-remove-endpoint'));
+                    endpoints.splice(index, 1);
+                    renderOllamaEndpoints(endpoints);
+                });
+            });
+        }
+
+        async function loadRuntimeSettings() {
+            const message = document.getElementById('runtimeMsg');
+            const res = await fetch('/settings/runtime');
+            const data = await res.json();
+            if (!res.ok) {
+                message.textContent = `Failed to load runtime settings: ${data.detail || 'request error'}`;
+                return;
+            }
+            document.getElementById('maxWorkers').value = data.max_workers || 1;
+            renderOllamaEndpoints(data.ollama_endpoints || []);
+        }
+
+        async function saveRuntimeSettings() {
+            const message = document.getElementById('runtimeMsg');
+            const rows = [...document.querySelectorAll('#ollamaEndpointBody tr')];
+            const ollama_endpoints = rows.map(row => ({
+                name: row.querySelector('[data-endpoint-name]').value.trim(),
+                url: row.querySelector('[data-endpoint-url]').value.trim(),
+            }));
+            const max_workers = Number(document.getElementById('maxWorkers').value);
+            const res = await fetch('/settings/runtime', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ max_workers, ollama_endpoints }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                message.textContent = `Failed: ${data.detail || 'request error'}`;
+                return;
+            }
+            message.textContent = data.workers_restart_required
+                ? 'Saved. Restart the API container to apply the worker count; endpoint changes apply to the next analysis.'
+                : 'Saved. Endpoint changes apply to the next analysis.';
+            renderOllamaEndpoints(data.ollama_endpoints);
+            await loadEnvList();
+        }
+
         async function loadTodayCalls() {
             const root = document.getElementById('callsBody');
             const callsDate = document.getElementById('callsDate');
@@ -1727,7 +1956,7 @@ async def settings_page():
         async function reloadAll() {
             const msg = document.getElementById('msg');
             msg.textContent = 'Reloading...';
-            await Promise.all([loadEnvList(), loadTodayCalls()]);
+            await Promise.all([loadEnvList(), loadTodayCalls(), loadRuntimeSettings()]);
             msg.textContent = 'Reloaded values.';
         }
 
@@ -1779,6 +2008,16 @@ async def settings_page():
         document.getElementById('reload').addEventListener('click', reloadAll);
         document.getElementById('vaultRefresh').addEventListener('click', refreshFromVault);
         document.getElementById('toggleValue').addEventListener('click', toggleValueVisibility);
+        document.getElementById('addOllamaEndpoint').addEventListener('click', () => {
+            const rows = document.querySelectorAll('#ollamaEndpointBody tr').length;
+            const endpoints = [...document.querySelectorAll('#ollamaEndpointBody tr')].map(row => ({
+                name: row.querySelector('[data-endpoint-name]').value,
+                url: row.querySelector('[data-endpoint-url]').value,
+            }));
+            endpoints.push({ name: `Ollama ${rows + 1}`, url: '' });
+            renderOllamaEndpoints(endpoints);
+        });
+        document.getElementById('saveRuntimeSettings').addEventListener('click', saveRuntimeSettings);
         reloadAll();
     </script>
 </body>
