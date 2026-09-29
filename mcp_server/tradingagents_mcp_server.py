@@ -6,7 +6,7 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Optional
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
@@ -15,7 +15,7 @@ def _api_base_url() -> str:
     return (os.getenv("TRADINGAGENTS_API_BASE_URL", "http://localhost:9000") or "http://localhost:9000").rstrip("/")
 
 
-def _request_json(method: str, path: str, body: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+def _request_json(method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
     url = f"{_api_base_url()}{path}"
     data = None
     headers = {"Accept": "application/json"}
@@ -48,7 +48,7 @@ def health_check() -> str:
 
 
 @mcp.tool()
-def submit_analysis(ticker: str, date: Optional[str] = None, llm_provider: str = "ollama") -> dict[str, Any]:
+def submit_analysis(ticker: str, date: str | None = None, llm_provider: str = "ollama") -> dict[str, Any]:
     """Submit a new stock analysis request."""
     payload: dict[str, Any] = {"ticker": ticker, "llm_provider": llm_provider}
     if date:
@@ -64,7 +64,7 @@ def get_request_status(request_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def get_latest_recommendation(ticker: str, provider: Optional[str] = None) -> dict[str, Any]:
+def get_latest_recommendation(ticker: str, provider: str | None = None) -> dict[str, Any]:
     """Fetch the latest final recommendation for a stock ticker."""
     safe_ticker = urllib.parse.quote(ticker, safe="")
     query = ""

@@ -1,5 +1,6 @@
 import argparse
 from datetime import date
+
 from dotenv import load_dotenv
 
 from tradingagents.default_config import DEFAULT_CONFIG

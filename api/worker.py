@@ -16,15 +16,14 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Optional
 
 from langchain_core.callbacks import BaseCallbackHandler
 
 from api.db import (
     DB_PATH,
     defer_due_google_pending_requests,
-    get_request,
     get_google_llm_calls_used_between,
+    get_request,
     list_due_pending_requests,
     reschedule_running_request,
     update_request_completed,
@@ -122,7 +121,7 @@ def _append_request_log(req_id: str, message: str) -> None:
 
 
 class _TimestampedTextStream:
-    def __init__(self, stream, lock: Optional[threading.Lock] = None) -> None:
+    def __init__(self, stream, lock: threading.Lock | None = None) -> None:
         self._stream = stream
         self._lock = lock or threading.Lock()
         self._buffer = ""
@@ -224,7 +223,7 @@ def _next_ollama_endpoint() -> str:
     return endpoint["url"].strip().rstrip("/")
 
 
-def _is_google_429_error(exc: Exception, provider: Optional[str]) -> bool:
+def _is_google_429_error(exc: Exception, provider: str | None) -> bool:
     if (provider or "").strip().lower() != "google":
         return False
     msg = str(exc).lower()
@@ -236,7 +235,7 @@ def _is_google_429_error(exc: Exception, provider: Optional[str]) -> bool:
     )
 
 
-def _is_openrouter_429_error(exc: Exception, provider: Optional[str]) -> bool:
+def _is_openrouter_429_error(exc: Exception, provider: str | None) -> bool:
     if (provider or "").strip().lower() != "openrouter":
         return False
     msg = str(exc).lower()
@@ -252,13 +251,13 @@ def _google_daily_call_limit() -> int:
         return 800
 
 
-def _next_midnight_utc_iso(now: Optional[datetime.datetime] = None) -> str:
+def _next_midnight_utc_iso(now: datetime.datetime | None = None) -> str:
     current = now or datetime.datetime.now(datetime.timezone.utc)
     next_day = (current + datetime.timedelta(days=1)).date()
     return datetime.datetime.combine(next_day, datetime.time.min, tzinfo=datetime.timezone.utc).isoformat()
 
 
-def _in_one_day_window_iso(now: Optional[datetime.datetime] = None) -> tuple[str, str]:
+def _in_one_day_window_iso(now: datetime.datetime | None = None) -> tuple[str, str]:
     current = now or datetime.datetime.now(datetime.timezone.utc)
     start = datetime.datetime.combine(current.date(), datetime.time.min, tzinfo=datetime.timezone.utc)
     end = start + datetime.timedelta(days=1)
@@ -266,10 +265,10 @@ def _in_one_day_window_iso(now: Optional[datetime.datetime] = None) -> tuple[str
 
 
 def _pick_provider_config(
-    request_provider: Optional[str],
-    requested_deep_model: Optional[str] = None,
-    requested_quick_model: Optional[str] = None,
-) -> tuple[str, Optional[str], str, str]:
+    request_provider: str | None,
+    requested_deep_model: str | None = None,
+    requested_quick_model: str | None = None,
+) -> tuple[str, str | None, str, str]:
     provider = (request_provider or "ollama").strip().lower()
     if provider not in SUPPORTED_PROVIDERS:
         provider = "ollama"
@@ -327,7 +326,7 @@ class _LLMTimingCallback(BaseCallbackHandler):
         self._lock = threading.Lock()
         self._started_at: dict[str, float] = {}
 
-    def _run_key(self, **kwargs) -> Optional[str]:
+    def _run_key(self, **kwargs) -> str | None:
         run_id = kwargs.get("run_id")
         return str(run_id) if run_id is not None else None
 
@@ -393,13 +392,13 @@ def _run_analysis(
     req_id: str,
     ticker: str,
     analysis_date: str,
-    llm_provider: Optional[str],
-    requested_deep_model: Optional[str] = None,
-    requested_quick_model: Optional[str] = None,
+    llm_provider: str | None,
+    requested_deep_model: str | None = None,
+    requested_quick_model: str | None = None,
 ) -> tuple[str, str, dict, str, str, str, float, dict]:
     """Blocking: runs TradingAgents and returns recommendation, file path, usage stats, and agent recommendations."""
-    from tradingagents.graph.trading_graph import TradingAgentsGraph
     from tradingagents.default_config import DEFAULT_CONFIG
+    from tradingagents.graph.trading_graph import TradingAgentsGraph
 
     provider, backend_url, deep_model, quick_model = _pick_provider_config(
         llm_provider, requested_deep_model, requested_quick_model
@@ -423,56 +422,55 @@ def _run_analysis(
 
     # Capture stdout and persist live logs while the request is running.
     captured = io.StringIO()
-    installed_here = not isinstance(sys.stdout, _ThreadLocalStdout)
-    original_stdout, stdout_proxy = install_timestamped_stdout()
     Path(ANALYSIS_DIR).mkdir(parents=True, exist_ok=True)
     live_log_path = Path(ANALYSIS_DIR) / f"{req_id}.live.log"
-    live_log = open(live_log_path, "a", encoding="utf-8")
-    tee = _TeeOutput(
-        [
-            captured,
-            _TimestampedTextStream(live_log),
-            _TimestampedTextStream(stdout_proxy.original_stream, _console_output_lock),
-        ]
-    )
-    stdout_proxy.set_thread_target(tee)
-
-    analysis_started_utc = datetime.datetime.now(datetime.timezone.utc)
-    analysis_started_timer = time.perf_counter()
-    print(f"[Analysis] start_time={analysis_started_utc.isoformat()} request_id={req_id}")
-    print(
-        f"[Analysis] routing request_id={req_id} provider={provider} "
-        f"endpoint={backend_url or 'provider-default'} "
-        f"deep_model={deep_model} quick_model={quick_model}"
-    )
-
-    final_state = None
-    stats_callback = _TrackingStatsHandler(provider)
-    try:
-        Path(CACHE_DIR).mkdir(parents=True, exist_ok=True)
-        Path(RESULTS_DIR).mkdir(parents=True, exist_ok=True)
-        Path(MEMORY_LOG_PATH).parent.mkdir(parents=True, exist_ok=True)
-        timing_callback = _LLMTimingCallback()
-        ta = TradingAgentsGraph(
-            debug=API_DEBUG_MODE,
-            config=config,
-            callbacks=[timing_callback, stats_callback],
+    with live_log_path.open("a", encoding="utf-8") as live_log:
+        installed_here = not isinstance(sys.stdout, _ThreadLocalStdout)
+        original_stdout, stdout_proxy = install_timestamped_stdout()
+        tee = _TeeOutput(
+            [
+                captured,
+                _TimestampedTextStream(live_log),
+                _TimestampedTextStream(stdout_proxy.original_stream, _console_output_lock),
+            ]
         )
-        final_state, decision = ta.propagate(ticker, analysis_date)
-    finally:
-        analysis_ended_utc = datetime.datetime.now(datetime.timezone.utc)
-        analysis_duration = time.perf_counter() - analysis_started_timer
+        stdout_proxy.set_thread_target(tee)
+
+        analysis_started_utc = datetime.datetime.now(datetime.timezone.utc)
+        analysis_started_timer = time.perf_counter()
+        print(f"[Analysis] start_time={analysis_started_utc.isoformat()} request_id={req_id}")
         print(
-            f"[Analysis] end_time={analysis_ended_utc.isoformat()} "
-            f"request_id={req_id} duration_seconds={analysis_duration:.3f}"
+            f"[Analysis] routing request_id={req_id} provider={provider} "
+            f"endpoint={backend_url or 'provider-default'} "
+            f"deep_model={deep_model} quick_model={quick_model}"
         )
-        tee.flush()
-        stdout_proxy.clear_thread_target()
-        live_log.close()
-        if installed_here:
-            restore_stdout(original_stdout, stdout_proxy)
-        # Deregister live counter regardless of success or failure
-        _live_deregister_calls(provider, stats_callback.get_stats().get("llm_calls", 0))
+
+        final_state = None
+        stats_callback = _TrackingStatsHandler(provider)
+        try:
+            Path(CACHE_DIR).mkdir(parents=True, exist_ok=True)
+            Path(RESULTS_DIR).mkdir(parents=True, exist_ok=True)
+            Path(MEMORY_LOG_PATH).parent.mkdir(parents=True, exist_ok=True)
+            timing_callback = _LLMTimingCallback()
+            ta = TradingAgentsGraph(
+                debug=API_DEBUG_MODE,
+                config=config,
+                callbacks=[timing_callback, stats_callback],
+            )
+            final_state, decision = ta.propagate(ticker, analysis_date)
+        finally:
+            analysis_ended_utc = datetime.datetime.now(datetime.timezone.utc)
+            analysis_duration = time.perf_counter() - analysis_started_timer
+            print(
+                f"[Analysis] end_time={analysis_ended_utc.isoformat()} "
+                f"request_id={req_id} duration_seconds={analysis_duration:.3f}"
+            )
+            tee.flush()
+            stdout_proxy.clear_thread_target()
+            if installed_here:
+                restore_stdout(original_stdout, stdout_proxy)
+            # Deregister live counter regardless of success or failure
+            _live_deregister_calls(provider, stats_callback.get_stats().get("llm_calls", 0))
 
     full_output = captured.getvalue()
     recommendation = str(decision)

@@ -11,10 +11,10 @@ from fastapi import HTTPException
 from api import main
 from api.schemas import OllamaEndpoint, RuntimeSettingsUpdateRequest
 from api.worker import (
-    _LLMTimingCallback,
-    _TimestampedTextStream,
     _configured_worker_count,
+    _LLMTimingCallback,
     _pick_provider_config,
+    _TimestampedTextStream,
 )
 
 

@@ -6,8 +6,7 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Optional
-
+from typing import Any
 
 _DEFAULT_VAULT_KEYS = (
     "OPENAI_API_KEY",
@@ -27,7 +26,7 @@ class VaultError(RuntimeError):
     """Raised when Vault calls fail."""
 
 
-def _is_truthy(value: Optional[str]) -> bool:
+def _is_truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 

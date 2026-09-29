@@ -22,8 +22,8 @@ from tradingagents.agents.utils.news_data_tools import (
     get_news,
 )
 from tradingagents.agents.utils.options_tools import (
-    get_options_chain,
     calculate_put_call_ratio,
+    get_options_chain,
 )
 from tradingagents.agents.utils.prediction_markets_tools import get_prediction_markets
 from tradingagents.agents.utils.technical_indicators_tools import get_indicators

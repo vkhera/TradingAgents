@@ -14,6 +14,7 @@ from langgraph.prebuilt import ToolNode
 # Import the abstract tool methods from agent_utils
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
+    calculate_put_call_ratio,
     get_balance_sheet,
     get_cashflow,
     get_fundamentals,
@@ -21,10 +22,9 @@ from tradingagents.agents.utils.agent_utils import (
     get_income_statement,
     get_indicators,
     get_insider_transactions,
-    get_options_chain,
-    calculate_put_call_ratio,
     get_macro_indicators,
     get_news,
+    get_options_chain,
     get_prediction_markets,
     get_stock_data,
     get_verified_market_snapshot,

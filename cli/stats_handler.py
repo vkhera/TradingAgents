@@ -1,6 +1,6 @@
 import threading
 import time
-from typing import Any, Dict, List, Union
+from typing import Any
 
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage
@@ -17,8 +17,8 @@ class StatsCallbackHandler(BaseCallbackHandler):
         self.tool_calls = 0
         self.tokens_in = 0
         self.tokens_out = 0
-        self.role_stats: Dict[str, Dict[str, Union[int, float]]] = {}
-        self._run_context: Dict[str, Dict[str, Union[str, float]]] = {}
+        self.role_stats: dict[str, dict[str, int | float]] = {}
+        self._run_context: dict[str, dict[str, str | float]] = {}
 
     @staticmethod
     def _normalize_role(raw_role: str) -> str:
@@ -44,7 +44,7 @@ class StatsCallbackHandler(BaseCallbackHandler):
     @classmethod
     def _extract_role(
         cls,
-        serialized: Dict[str, Any],
+        serialized: dict[str, Any],
         **kwargs: Any,
     ) -> str:
         metadata = kwargs.get("metadata") or {}
@@ -73,7 +73,7 @@ class StatsCallbackHandler(BaseCallbackHandler):
         run_id = kwargs.get("run_id")
         return str(run_id) if run_id is not None else ""
 
-    def _ensure_role_bucket(self, role: str) -> Dict[str, Union[int, float]]:
+    def _ensure_role_bucket(self, role: str) -> dict[str, int | float]:
         if role not in self.role_stats:
             self.role_stats[role] = {
                 "llm_calls": 0,
@@ -84,7 +84,7 @@ class StatsCallbackHandler(BaseCallbackHandler):
             }
         return self.role_stats[role]
 
-    def _register_start(self, serialized: Dict[str, Any], **kwargs: Any) -> None:
+    def _register_start(self, serialized: dict[str, Any], **kwargs: Any) -> None:
         role = self._extract_role(serialized, **kwargs)
         run_id = self._run_id_from_kwargs(**kwargs)
         started_at = time.perf_counter()

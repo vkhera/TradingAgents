@@ -1,8 +1,8 @@
 import asyncio
 import os
+import re
 import time
 import warnings
-import re
 from typing import Any
 
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -110,9 +110,9 @@ class GoogleClient(BaseLLMClient):
     """Client for Google Gemini models."""
 
     _MODEL_ALIASES = {
-        # Retired preview ID: route to its stable 2.5 equivalent. Gemini 3.1
-        # models remain supported and accept the current thinking_level API.
+        # Retired preview IDs: route to their stable 2.5 equivalents.
         "gemini-3-flash-preview": "gemini-2.5-flash",
+        "gemini-3.1-flash-lite-preview": "gemini-2.5-flash-lite",
     }
 
     def __init__(self, model: str, base_url: str | None = None, **kwargs):

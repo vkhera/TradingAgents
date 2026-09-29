@@ -1,4 +1,4 @@
-"""
+r"""
 run_ollama.py — Quick-start TradingAgents with local Ollama and free yfinance data.
 
 Available local models (from http://localhost:11434):
@@ -16,8 +16,9 @@ Usage:
 """
 
 import argparse
-from tradingagents.graph.trading_graph import TradingAgentsGraph
+
 from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.graph.trading_graph import TradingAgentsGraph
 
 OLLAMA_BASE_URL = "http://localhost:11434/v1"
 
@@ -58,7 +59,7 @@ def main():
     print(f"  Quick-think model: {QUICK_THINK_MODEL}")
     print(f"  Ticker           : {args.ticker}")
     print(f"  Date             : {args.date}")
-    print(f"  Data source      : yfinance (free)\n")
+    print("  Data source      : yfinance (free)\n")
 
     ta = TradingAgentsGraph(debug=args.debug, config=config)
     _, decision = ta.propagate(args.ticker, args.date)

@@ -4,26 +4,23 @@ Quick test to verify options chain and put/call ratio tools are working correctl
 This demonstrates the new market analyst capabilities.
 """
 
-from tradingagents.agents.utils.options_tools import (
-    get_options_chain,
-    calculate_put_call_ratio
-)
+from tradingagents.agents.utils.options_tools import calculate_put_call_ratio, get_options_chain
 
 
 def test_options_tools():
     """Test the new options analysis tools."""
-    
+
     print("=" * 80)
     print("Testing Options Chain & Put/Call Ratio Tools")
     print("=" * 80)
-    
+
     tickers = ["AAPL", "MSFT", "TSLA"]
-    
+
     for ticker in tickers:
         print(f"\n{'='*80}")
         print(f"Ticker: {ticker}")
         print(f"{'='*80}")
-        
+
         # Test get_options_chain
         print(f"\n[1] Fetching Options Chain for {ticker}...")
         try:
@@ -36,7 +33,7 @@ def test_options_tools():
             print(f"   Preview:\n{chain_result[:300]}...\n")
         except Exception as e:
             print(f"[ERROR] Error fetching options chain: {e}\n")
-        
+
         # Test calculate_put_call_ratio (volume-based)
         print(f"[2] Calculating Volume-Based Put/Call Ratio for {ticker}...")
         try:
@@ -45,11 +42,11 @@ def test_options_tools():
                 "expiry_date": "nearest",
                 "ratio_type": "volume"
             })
-            print(f"[OK] Put/Call ratio calculated")
+            print("[OK] Put/Call ratio calculated")
             print(f"   {ratio_result}\n")
         except Exception as e:
             print(f"[ERROR] Error calculating put/call ratio: {e}\n")
-        
+
         # Test calculate_put_call_ratio (open interest-based)
         print(f"[3] Calculating Open Interest-Based Put/Call Ratio for {ticker}...")
         try:
@@ -59,9 +56,9 @@ def test_options_tools():
                 "ratio_type": "oi"
             })
             # Print just the ratio line
-            ratio_lines = [l for l in oi_result.split('\n') if 'Put/Call OI Ratio' in l]
+            ratio_lines = [line for line in oi_result.split('\n') if 'Put/Call OI Ratio' in line]
             if ratio_lines:
-                print(f"[OK] Open Interest ratio calculated")
+                print("[OK] Open Interest ratio calculated")
                 print(f"   {ratio_lines[0]}\n")
         except Exception as e:
             print(f"[ERROR] Error calculating OI ratio: {e}\n")

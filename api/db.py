@@ -3,12 +3,10 @@ Database layer — SQLite via aiosqlite for async access.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
 
 import aiosqlite
 
@@ -118,9 +116,9 @@ async def create_batch_schedule(
     ticker: str,
     llm_provider: str,
     frequency: str,
-    next_run_at: Optional[str] = None,
-    deep_model: Optional[str] = None,
-    quick_model: Optional[str] = None,
+    next_run_at: str | None = None,
+    deep_model: str | None = None,
+    quick_model: str | None = None,
     db_path: str = DB_PATH,
 ) -> str:
     schedule_id = str(uuid.uuid4())
@@ -177,7 +175,7 @@ async def list_batch_schedules(db_path: str = DB_PATH) -> list[dict]:
             return [dict(r) for r in rows]
 
 
-async def get_batch_schedule(schedule_id: str, db_path: str = DB_PATH) -> Optional[dict]:
+async def get_batch_schedule(schedule_id: str, db_path: str = DB_PATH) -> dict | None:
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
@@ -207,8 +205,8 @@ async def update_batch_schedule_config(
     llm_provider: str,
     frequency: str,
     next_run_at: str,
-    deep_model: Optional[str] = None,
-    quick_model: Optional[str] = None,
+    deep_model: str | None = None,
+    quick_model: str | None = None,
     db_path: str = DB_PATH,
 ) -> bool:
     async with aiosqlite.connect(db_path) as db:
@@ -226,7 +224,7 @@ async def update_batch_schedule_config(
 
 async def get_recommendation_history(
     ticker: str,
-    llm_provider: Optional[str] = None,
+    llm_provider: str | None = None,
     limit: int = 50,
     db_path: str = DB_PATH,
 ) -> list[dict]:
@@ -321,9 +319,9 @@ async def create_request(
     ticker: str,
     analysis_date: str,
     llm_provider: str = "ollama",
-    available_after: Optional[str] = None,
-    requested_deep_model: Optional[str] = None,
-    requested_quick_model: Optional[str] = None,
+    available_after: str | None = None,
+    requested_deep_model: str | None = None,
+    requested_quick_model: str | None = None,
     db_path: str = DB_PATH,
 ) -> str:
     req_id = str(uuid.uuid4())
@@ -347,7 +345,7 @@ async def create_request(
     return req_id
 
 
-async def get_request(req_id: str, db_path: str = DB_PATH) -> Optional[dict]:
+async def get_request(req_id: str, db_path: str = DB_PATH) -> dict | None:
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
@@ -357,7 +355,7 @@ async def get_request(req_id: str, db_path: str = DB_PATH) -> Optional[dict]:
             return dict(row) if row else None
 
 
-async def list_requests(status_filter: Optional[str], db_path: str = DB_PATH) -> list[dict]:
+async def list_requests(status_filter: str | None, db_path: str = DB_PATH) -> list[dict]:
     """Return requests filtered by status group.
     status_filter='open'   → pending + running
     status_filter='completed' → completed only
@@ -401,13 +399,13 @@ async def update_request_completed(
     req_id: str,
     recommendation: str,
     analysis_file: str,
-    llm_provider: Optional[str] = None,
-    deep_model: Optional[str] = None,
-    quick_model: Optional[str] = None,
-    estimated_cost_usd: Optional[float] = None,
-    stats: Optional[dict] = None,
-    agent_recommendations: Optional[dict] = None,
-    llm_role_stats: Optional[dict] = None,
+    llm_provider: str | None = None,
+    deep_model: str | None = None,
+    quick_model: str | None = None,
+    estimated_cost_usd: float | None = None,
+    stats: dict | None = None,
+    agent_recommendations: dict | None = None,
+    llm_role_stats: dict | None = None,
     db_path: str = DB_PATH,
 ) -> None:
     llm_calls = int((stats or {}).get("llm_calls", 0))
@@ -469,7 +467,7 @@ async def reschedule_running_request(
     available_after: str,
     reason: str,
     deferred_for_quota: int,
-    analysis_date: Optional[str] = None,
+    analysis_date: str | None = None,
     db_path: str = DB_PATH,
 ) -> bool:
     """Move a running request back to pending with a future availability time."""
@@ -513,9 +511,8 @@ async def get_google_llm_calls_used_between(
     end_iso: str,
     db_path: str = DB_PATH,
 ) -> int:
-    async with aiosqlite.connect(db_path) as db:
-        async with db.execute(
-            """
+    async with aiosqlite.connect(db_path) as db, db.execute(
+        """
             SELECT COALESCE(SUM(COALESCE(llm_calls, 0)), 0)
             FROM requests
             WHERE status='completed'
@@ -523,10 +520,10 @@ async def get_google_llm_calls_used_between(
               AND completed_at >= ?
               AND completed_at < ?
             """,
-            (start_iso, end_iso),
-        ) as cursor:
-            row = await cursor.fetchone()
-            return int(row[0] if row and row[0] is not None else 0)
+        (start_iso, end_iso),
+    ) as cursor:
+        row = await cursor.fetchone()
+        return int(row[0] if row and row[0] is not None else 0)
 
 
 async def get_llm_calls_by_provider_between(
@@ -717,10 +714,10 @@ async def cancel_all_open_requests(db_path: str = DB_PATH) -> int:
 
 async def delete_incomplete_requests(db_path: str = DB_PATH) -> int:
     """Delete all incomplete analysis records (status not 'completed').
-    
+
     Removes all requests with status in: 'pending', 'running', 'failed', 'canceled'.
     Only keeps successfully completed analyses.
-    
+
     Returns the number of records deleted.
     """
     async with aiosqlite.connect(db_path) as db:

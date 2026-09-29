@@ -1,6 +1,5 @@
 import unittest
-from unittest.mock import Mock
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -58,12 +57,12 @@ class TestGoogleApiKeyStandardization(unittest.TestCase):
     @patch("tradingagents.llm_clients.google_client.time.sleep")
     @patch("tradingagents.llm_clients.google_client.ChatGoogleGenerativeAI.invoke")
     def test_non_429_error_does_not_sleep_or_retry(self, mock_parent_invoke, mock_sleep):
-        mock_parent_invoke.side_effect = Exception("500 internal server error")
+        mock_parent_invoke.side_effect = RuntimeError("500 internal server error")
 
         client = GoogleClient("gemini-2.5-flash", api_key="test-key")
         llm = client.get_llm()
 
-        with self.assertRaises(Exception):
+        with self.assertRaises(RuntimeError):
             llm.invoke("hello")
 
         mock_sleep.assert_not_called()
