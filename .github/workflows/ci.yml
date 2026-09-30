@@ -46,12 +46,16 @@ jobs:
           TRADINGAGENTS_API_DB_PATH: ${{ runner.temp }}/tradingagents-api.db
           PYTHON_DOTENV_DISABLED: "1"
         run: |
-          uvicorn api.main:app --host 127.0.0.1 --port 9000 > /tmp/tradingagents-api.log 2>&1 &
+          python -m uvicorn api.main:app --host 127.0.0.1 --port 9000 > /tmp/tradingagents-api.log 2>&1 &
           api_pid=$!
           trap 'kill "$api_pid" 2>/dev/null || true' EXIT
           for attempt in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:9000/healthz > /dev/null; then
+            if python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/healthz', timeout=1)" > /dev/null 2>&1; then
               break
+            fi
+            if ! kill -0 "$api_pid" 2>/dev/null; then
+              cat /tmp/tradingagents-api.log
+              exit 1
             fi
             if [ "$attempt" -eq 30 ]; then
               cat /tmp/tradingagents-api.log
@@ -59,7 +63,11 @@ jobs:
             fi
             sleep 1
           done
-          pytest -q tests/test_api_ui_smoke_post_deploy.py
+          pytest -q tests/test_api_ui_smoke_post_deploy.py || {
+            result=$?
+            cat /tmp/tradingagents-api.log
+            exit "$result"
+          }
 
   smoke-install:
     name: clean-install smoke
