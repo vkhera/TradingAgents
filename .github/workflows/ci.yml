@@ -45,6 +45,8 @@ jobs:
         env:
           TRADINGAGENTS_API_DB_PATH: ${{ runner.temp }}/tradingagents-api.db
           PYTHON_DOTENV_DISABLED: "1"
+          NO_PROXY: "localhost,127.0.0.1"
+          no_proxy: "localhost,127.0.0.1"
         run: |
           python -m uvicorn api.main:app --host 127.0.0.1 --port 9000 > /tmp/tradingagents-api.log 2>&1 &
           api_pid=$!
