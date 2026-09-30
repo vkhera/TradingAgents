@@ -75,10 +75,12 @@ class _TrackingStatsHandler(StatsCallbackHandler):
         _live_register_call(self._provider)
 
 
-ANALYSIS_DIR = "/data/analysis"
-CACHE_DIR = "/data/cache"
-RESULTS_DIR = "/data/logs"
-MEMORY_LOG_PATH = "/data/memory/trading_memory.md"
+ANALYSIS_DIR = os.getenv("TRADINGAGENTS_API_ANALYSIS_DIR", "/data/analysis")
+CACHE_DIR = os.getenv("TRADINGAGENTS_API_CACHE_DIR", "/data/cache")
+RESULTS_DIR = os.getenv("TRADINGAGENTS_API_RESULTS_DIR", "/data/logs")
+MEMORY_LOG_PATH = os.getenv(
+    "TRADINGAGENTS_API_MEMORY_LOG_PATH", "/data/memory/trading_memory.md"
+)
 API_DEBUG_MODE = os.getenv("API_DEBUG_MODE", "true").strip().lower() in ("1", "true", "yes", "on")
 
 

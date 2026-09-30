@@ -44,6 +44,10 @@ jobs:
       - name: Start API and run smoke tests
         env:
           TRADINGAGENTS_API_DB_PATH: ${{ runner.temp }}/tradingagents-api.db
+          TRADINGAGENTS_API_ANALYSIS_DIR: ${{ runner.temp }}/analysis
+          TRADINGAGENTS_API_CACHE_DIR: ${{ runner.temp }}/cache
+          TRADINGAGENTS_API_RESULTS_DIR: ${{ runner.temp }}/logs
+          TRADINGAGENTS_API_MEMORY_LOG_PATH: ${{ runner.temp }}/memory/trading_memory.md
           PYTHON_DOTENV_DISABLED: "1"
           NO_PROXY: "localhost,127.0.0.1"
           no_proxy: "localhost,127.0.0.1"
