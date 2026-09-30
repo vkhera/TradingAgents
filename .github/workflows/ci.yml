@@ -27,7 +27,39 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,api]"
       - name: Run test suite
-        run: pytest -q
+        run: pytest -q --ignore=tests/test_api_ui_smoke_post_deploy.py
+
+  api-smoke:
+    name: API UI smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install API test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,api]"
+      - name: Start API and run smoke tests
+        env:
+          TRADINGAGENTS_API_DB_PATH: ${{ runner.temp }}/tradingagents-api.db
+          PYTHON_DOTENV_DISABLED: "1"
+        run: |
+          uvicorn api.main:app --host 127.0.0.1 --port 9000 > /tmp/tradingagents-api.log 2>&1 &
+          api_pid=$!
+          trap 'kill "$api_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:9000/healthz > /dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              cat /tmp/tradingagents-api.log
+              exit 1
+            fi
+            sleep 1
+          done
+          pytest -q tests/test_api_ui_smoke_post_deploy.py
 
   smoke-install:
     name: clean-install smoke
