@@ -50,7 +50,6 @@ jobs:
           TRADINGAGENTS_API_MEMORY_LOG_PATH: ${{ runner.temp }}/memory/trading_memory.md
           PYTHON_DOTENV_DISABLED: "1"
           NO_PROXY: "localhost,127.0.0.1"
-          no_proxy: "localhost,127.0.0.1"
         run: |
           python -m uvicorn api.main:app --host 127.0.0.1 --port 9000 > /tmp/tradingagents-api.log 2>&1 &
           api_pid=$!
