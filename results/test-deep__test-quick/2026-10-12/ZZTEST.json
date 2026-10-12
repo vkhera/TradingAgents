@@ -1,9 +1,0 @@
-{
-  "ticker": "ZZTEST",
-  "analysis_date": "2026-10-12",
-  "llm_provider": "ollama",
-  "deep_think_llm": "test-deep",
-  "quick_think_llm": "test-quick",
-  "recommendation": "Hold",
-  "created_at": "2026-10-12T16:07:07.883692+00:00"
-}
