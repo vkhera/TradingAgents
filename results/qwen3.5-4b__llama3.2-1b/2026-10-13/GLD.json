@@ -1,0 +1,9 @@
+{
+  "ticker": "GLD",
+  "analysis_date": "2026-10-13",
+  "llm_provider": "ollama",
+  "deep_think_llm": "qwen3.5:4b",
+  "quick_think_llm": "llama3.2:1b",
+  "recommendation": "Hold",
+  "created_at": "2026-10-13T01:54:36.967977+00:00"
+}
