@@ -1,0 +1,9 @@
+{
+  "ticker": "NVDA",
+  "analysis_date": "2026-10-13",
+  "llm_provider": "ollama",
+  "deep_think_llm": "qwen3.5:4b",
+  "quick_think_llm": "qwen3.5:2b",
+  "recommendation": "Overweight",
+  "created_at": "2026-10-13T10:01:44.715984+00:00"
+}
