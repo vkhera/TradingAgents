@@ -1,0 +1,9 @@
+{
+  "ticker": "TSLA",
+  "analysis_date": "2026-10-15",
+  "llm_provider": "ollama",
+  "deep_think_llm": "qwen3.5:4b",
+  "quick_think_llm": "qwen3.5:2b",
+  "recommendation": "Hold",
+  "created_at": "2026-10-15T13:24:51.988385+00:00"
+}
