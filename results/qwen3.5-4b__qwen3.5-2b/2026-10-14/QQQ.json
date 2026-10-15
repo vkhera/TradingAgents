@@ -1,0 +1,9 @@
+{
+  "ticker": "QQQ",
+  "analysis_date": "2026-10-14",
+  "llm_provider": "ollama",
+  "deep_think_llm": "qwen3.5:4b",
+  "quick_think_llm": "qwen3.5:2b",
+  "recommendation": "Overweight",
+  "created_at": "2026-10-15T05:45:09.108369+00:00"
+}
