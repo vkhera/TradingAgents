@@ -1,0 +1,9 @@
+{
+  "ticker": "FNGU",
+  "analysis_date": "2026-10-15",
+  "llm_provider": "ollama",
+  "deep_think_llm": "qwen3.5:4b",
+  "quick_think_llm": "qwen3.5:2b",
+  "recommendation": "Hold",
+  "created_at": "2026-10-15T17:37:36.953737+00:00"
+}
