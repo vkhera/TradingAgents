@@ -1,0 +1,9 @@
+{
+  "ticker": "CAT",
+  "analysis_date": "2026-10-27",
+  "llm_provider": "ollama",
+  "deep_think_llm": "qwen3.5:4b",
+  "quick_think_llm": "qwen2.5:3b",
+  "recommendation": "Overweight",
+  "created_at": "2026-10-27T03:58:41.405920+00:00"
+}
