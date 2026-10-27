@@ -1,0 +1,9 @@
+{
+  "ticker": "IBIT",
+  "analysis_date": "2026-10-27",
+  "llm_provider": "ollama",
+  "deep_think_llm": "qwen3.5:4b",
+  "quick_think_llm": "qwen3.5:2b",
+  "recommendation": "Overweight",
+  "created_at": "2026-10-27T20:59:50.368432+00:00"
+}
